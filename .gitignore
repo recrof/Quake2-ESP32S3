@@ -1,0 +1,12 @@
+build/
+build-*/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+host/obj*/
+host/q2host*
+# game data: not redistributable
+gamedata/
+*.pak
+*.PAK
