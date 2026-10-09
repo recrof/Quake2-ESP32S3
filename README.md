@@ -28,8 +28,24 @@ fits in the 8 MB of PSRAM of the ESP32-S3 (5.9 MB left for the game data):
 
 ## Status
 
-Work in progress: the game runs (about 15-20 fps), the largest maps may still run out of
-memory.
+The whole single player game (all units and secret levels) loads and plays, with sound
+and level changes within and between units (save games are not tested much yet). Frame
+rate: 15-25 fps in game, 21.5 fps in the `demo1` timedemo. The largest maps (`lab`, `hangar2`, `city3`) leave a few hundred kB of
+PSRAM free. Multiplayer and mods are not supported.
+
+## Performance
+
+- The second core draws the world spans (rows split by parity) and the model triangles
+  (split by triangle index), while the first core walks the BSP and builds the edges.
+- Single precision math everywhere (`-fsingle-precision-constant`, `sinf`/`sqrtf`...): the
+  ESP32-S3 FPU has no double precision, and float division is a ROM call, so the renderer
+  uses the `recip0.s` reciprocal instruction with Newton steps (`R_Recip`).
+- Moving brushes (`SV_Push`) query the area tree instead of every entity.
+- Flash and octal PSRAM at 120 MHz (about 20% faster than 80 MHz). ESP-IDF marks octal
+  PSRAM at 120 MHz as experimental: the timing is tuned at boot and a large temperature
+  change (about 20 °C) can make it fail. If the game crashes at random once warm, go back to
+  `CONFIG_ESPTOOLPY_FLASHFREQ_80M` and `CONFIG_SPIRAM_SPEED_80M` in `sdkconfig.defaults`
+  (delete `sdkconfig` and rebuild).
 
 ## Game data
 
@@ -64,18 +80,76 @@ tools/flash.sh assets     # firmware and gamedata/assets.bin (14 MB, once)
 tools/flash.sh            # firmware only
 ```
 
+`tools/flash.sh` builds before flashing. With several boards connected it does not guess:
+give the port, `PORT=/dev/cu.usbmodem3101 tools/flash.sh`. After changing
+`sdkconfig.defaults`, delete `sdkconfig` and run `cmake` again.
+
 If flashing fails, hold BOOT and press RESET to enter the download mode.
+
+## Controls
+
+**Touch screen** (drawn over the game once the screen has been touched):
+
+- left half: virtual stick where the finger lands (move, strafe)
+- right half: drag to turn and look
+- FIRE, JUMP and NEXT WEAPON buttons on the right (dragging from FIRE also looks)
+- MENU in the top left corner
+- in menus and the console: swipe for the arrow keys, tap for enter
+
+**BOOT button**: menu (escape).
+
+**Bluetooth LE gamepad, keyboard or mouse**: the board scans for BLE HID devices and connects
+to the first one found (bonded devices first) and reconnects to it later. To pair a new
+device, put it in pairing mode. Only Bluetooth LE devices work (the ESP32-S3 has no
+Bluetooth Classic), e.g. Xbox Wireless controllers or 8BitDo in Android mode. Gamepad:
+
+| Control | Game | Menus |
+|---|---|---|
+| left stick | move, strafe | arrows |
+| right stick | turn, look | |
+| RT / LT | fire / run | enter / shift |
+| A / B | jump / crouch | enter / escape |
+| X / Y | next weapon / scores | |
+| LB / RB | strafe left / right | page up / down |
+| L3 / R3 | look up / down | |
+| START / SELECT | menu / console | |
+
+Keyboards work as on a PC (default Quake II bindings), mice turn and look and their buttons
+are MOUSE1-3.
 
 ## Serial console
 
 The USB serial port is a Quake console: any line is a console command (`map base1`, `god`,
-`give all`, `mem`...). Local commands: `shot` (screenshot, saved as a PNG by
-`tools/serial_daemon.py`), `sysmem`, `tasks`, `ls <dir>`, `put` (see `tools/sdput.py`),
-`reboot`. On macOS, opening the port resets the ESP32-S3: `tools/logger.sh <dir>` keeps it open
+`give all`, `mem`...). Local commands:
+
+| Command | |
+|---|---|
+| `shot` | screenshot, saved as a PNG by `tools/serial_daemon.py` |
+| `sysmem`, `tasks` | ESP-IDF heap and task stacks |
+| `cpu` | CPU use per task, time spent waiting for the second core and the display |
+| `prof [ms]` | sampling profiler of the game core (see `tools/profile.py`) |
+| `ls <dir>`, `put` | SD card listing and upload (see `tools/sdput.py`) |
+| `reboot`, `start` | restart, start the game after a crash |
+
+On macOS, opening the port resets the ESP32-S3: `tools/logger.sh <dir>` keeps it open
 (console in `<dir>/console.log`, commands appended to `<dir>/commands`).
+
+Benchmark: `timedemo 1` then `demomap demo1.dm2` prints the frame rate at the end. Set
+`timedemo 0` afterwards: otherwise the game runs faster than real time.
 
 After a crash, the board restarts and waits on the serial console (send `start`) instead of
 crashing again: press RESET to play.
+
+## Tools
+
+| Tool | |
+|---|---|
+| `tools/flash.sh [assets]` | build and flash (`PORT=...`) |
+| `tools/mkassets.py` | flash asset image (models and skins) from the PAK files |
+| `tools/logger.sh`, `tools/serial_daemon.py` | serial console logger, screenshots |
+| `tools/sdput.py` | copy files to the SD card over USB |
+| `tools/mapsweep.sh` | load maps one after the other and report errors, fps and memory |
+| `tools/profile.py` | per function histogram of a `prof` capture: `tools/profile.py console.log build/Quake2ESP32S3.elf` |
 
 ## Host build
 
@@ -87,6 +161,8 @@ image as the ESP32 does):
 make -C host -j8
 cd gamedata && Q2ASSETS=assets.bin ../host/q2host +set basedir . +map base1
 ```
+
+`-msec <n>` runs with a fixed frame time and a simulated clock, for reproducible tests.
 
 ## License
 
