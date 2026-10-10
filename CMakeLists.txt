@@ -1,8 +1,11 @@
-# Quake II for ESP32-S3 (Seeed Wio Tracker L2)
+# Quake II for ESP32-S3 (Seeed Wio Tracker L2, LilyGO T-Deck)
 cmake_minimum_required(VERSION 3.16)
 # Board selected on the command line (-DBOARD=...): keep its configuration in the build directory
 if(DEFINED BOARD)
     set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
+    if(BOARD STREQUAL "BOARD_LILYGO_TDECK")
+        set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.tdeck")
+    endif()
 endif()
 set(PROJECT_VER "0.1")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

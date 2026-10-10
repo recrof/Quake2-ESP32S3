@@ -516,6 +516,7 @@ char	*Cvar_Serverinfo (void);
 // returns an info string containing all the CVAR_SERVERINFO cvars
 
 extern	qboolean	userinfo_modified;
+extern	qboolean	archive_modified;	// ESP32: config.cfg must be written
 // this is set each time a CVAR_USERINFO variable is changed
 // so that the client knows to send it to the server
 
@@ -776,6 +777,7 @@ extern	int		time_after_ref;
 void Z_Free (void *ptr);
 void *Z_Malloc (int size);			// returns 0 filled memory
 void *Z_TryMalloc (int size);		// ESP32: NULL when out of memory
+void *Z_TryMallocTop (int size);	// ESP32: same, from the top of the arena (per map data)
 void *Z_TagMalloc (int size, int tag);
 void Z_FreeTags (int tag);
 

@@ -23,4 +23,15 @@ void displaySendPixels(const uint16_t *data, size_t numPixels, bool last);
 int displayWaitOne(void);
 // Waits for all queued transfers
 void displayWaitAll(void);
+// SD card on the display SPI pins: an SD transaction must not run while a display
+// transfer is in flight. The display holds the lock during a frame and lets waiting
+// SD transactions in between its transfers.
+// With the SD card on its own SPI controller (SD_SPI_HOST != DISPLAY_SPI_HOST), the
+// shared clock and data pins are switched between the two controllers in the GPIO
+// matrix by the lock: ESP-IDF's bus sharing is not used then, as it can crash
+// (spi_bus_lock_bg_exit) when a polling device (sdspi) acquires the bus while another
+// device's interrupt transfers finish on the other core.
+#define DISPLAY_SHARES_SD_BUS   (SD_MODE == SD_MODE_SPI && SD_PIN_SCLK >= 0 && SD_PIN_SCLK == DISPLAY_PIN_SCLK)
+void displayBusLock(void);
+void displayBusUnlock(void);
 #endif

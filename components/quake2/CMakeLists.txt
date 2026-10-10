@@ -67,6 +67,7 @@ set(QUAKE2_SOURCES
 	${QUAKE_SOURCE_DIR}/qcommon/md4.c
 	${QUAKE_SOURCE_DIR}/qcommon/net_chan.c
 	${QUAKE_SOURCE_DIR}/qcommon/pmove.c
+	${QUAKE_SOURCE_DIR}/qcommon/q_perf.c
 
 	# Other
 	${QUAKE_SOURCE_DIR}/other/glob.c
@@ -159,3 +160,7 @@ target_compile_options(${COMPONENT_LIB} PRIVATE -w -fsigned-char -fno-strict-ali
 set_source_files_properties(${QUAKE2_REF_SOFT_SOURCES} PROPERTIES
 	COMPILE_OPTIONS "-O3;-funroll-loops;-fno-math-errno;-fno-stack-protector;-fsingle-precision-constant"
 )
+
+# The files in the pak files are read through a pool of pak handles that stay
+# open: fclose gives them back instead of closing them (qcommon/files.c)
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=fclose")

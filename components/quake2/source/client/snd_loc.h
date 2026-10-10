@@ -167,3 +167,4 @@ void S_FreeSfxCache (sfx_t *sfx);
 extern sfx_t known_sfx[];
 extern int num_sfx;
 void S_MakeRoom (int size);
+int S_CacheBudget (void);	// bytes the sound cache may use now

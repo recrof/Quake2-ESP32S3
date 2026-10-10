@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 // common.c -- misc functions used in client and server
 #include "qcommon.h"
+#include "q_perf.h"
 #include <setjmp.h>
 #include "esp_heap_caps.h"
 #include "../other/q_arena.h"
@@ -1231,12 +1232,12 @@ Z_TryMalloc
 ESP32: as Z_Malloc, but returns NULL when out of memory
 ========================
 */
-void *Z_TryMalloc (int size)
+static void *Z_TryMallocFrom (int size, int top, void *caller)
 {
 	zhead_t	*z;
 
 	size = size + sizeof(zhead_t);
-	z = Q_Arena_AllocFrom (size, 0, __builtin_return_address (0));
+	z = Q_Arena_AllocFrom (size, top, caller);
 	if (!z)
 		return NULL;
 	memset (z, 0, size);
@@ -1250,6 +1251,18 @@ void *Z_TryMalloc (int size)
 	z_chain.next->prev = z;
 	z_chain.next = z;
 	return (void *)(z+1);
+}
+
+void *Z_TryMalloc (int size)
+{
+	return Z_TryMallocFrom (size, 0, __builtin_return_address (0));
+}
+
+// ESP32: from the top of the arena, with the per map data (the sound cache:
+// freed at each map change, it would leave holes between the long lived blocks)
+void *Z_TryMallocTop (int size)
+{
+	return Z_TryMallocFrom (size, 1, __builtin_return_address (0));
 }
 
 /*
@@ -1509,6 +1522,7 @@ void Qcommon_Init (int argc, char **argv)
 	// init commands and vars
 	//
     Cmd_AddCommand ("z_stats", Z_Stats_f);
+	Perf_Init ();
     Cmd_AddCommand ("error", Com_Error_f);
 
 	host_speeds = Cvar_Get ("host_speeds", "0", 0);
@@ -1570,6 +1584,8 @@ void Qcommon_Frame (int msec)
 	if (setjmp (abortframe) )
 		return;			// an ERR_DROP was thrown
 
+	Perf_Frame ();
+
 	if ( log_stats->modified )
 	{
 		log_stats->modified = false;
@@ -1625,12 +1641,16 @@ void Qcommon_Frame (int msec)
 	if (host_speeds->value)
 		time_before = Sys_Milliseconds ();
 
+	Perf_Push (PERF_SERVER);
 	SV_Frame (msec);
+	Perf_Pop ();
 
 	if (host_speeds->value)
 		time_between = Sys_Milliseconds ();		
 
+	Perf_Push (PERF_CLIENT);
 	CL_Frame (msec);
+	Perf_Pop ();
 
 	if (host_speeds->value)
 		time_after = Sys_Milliseconds ();		

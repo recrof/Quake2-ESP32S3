@@ -14,8 +14,11 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
+#include "esp_rom_gpio.h"
+#include "soc/spi_periph.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "display.h"
@@ -45,6 +48,12 @@ static int queuedHead, queuedCount;
 static bool ready;
 static bool firstPixels;            // QSPI: next pixel transfer must send the write header
 static bool busAcquired;
+#if DISPLAY_SHARES_SD_BUS
+static SemaphoreHandle_t busMutex;
+static SemaphoreHandle_t busTaken;  // given by an SD transaction when it got the bus
+static volatile int busWaiters;     // SD transactions waiting for the bus
+static bool busHeld;                // by the display task
+#endif
 
 bool displayIsReady(void)
 {
@@ -79,11 +88,13 @@ static void sendCommand(uint8_t cmd, const uint8_t *data, int len)
     }
     spi_device_polling_transmit(spi, &t);
 #else
+    // interrupt transactions, as the pixels: mixing them with polling ones on
+    // the same device can crash ESP-IDF's bus lock (spi_bus_lock_bg_exit)
     t.length = 8;
     t.flags = SPI_TRANS_USE_TXDATA;
     t.tx_data[0] = cmd;
     t.user = (void*) 0;
-    spi_device_polling_transmit(spi, &t);
+    spi_device_transmit(spi, &t);
     if (len)
     {
         memset(&t, 0, sizeof(t));
@@ -98,7 +109,7 @@ static void sendCommand(uint8_t cmd, const uint8_t *data, int len)
             t.tx_buffer = data;
         }
         t.user = (void*) 1;
-        spi_device_polling_transmit(spi, &t);
+        spi_device_transmit(spi, &t);
     }
 #endif
 }
@@ -191,12 +202,81 @@ static const uint8_t initCommands[] =
 };
 #endif
 
+#if DISPLAY_SHARES_SD_BUS
+// connects the shared clock and data output pins to an SPI controller
+static void routePins(int host)
+{
+    // (the hosts are enum values: not usable in #if)
+    if (SD_SPI_HOST != DISPLAY_SPI_HOST)
+    {
+        esp_rom_gpio_connect_out_signal(DISPLAY_PIN_SCLK, spi_periph_signal[host].spiclk_out, false, false);
+        esp_rom_gpio_connect_out_signal(DISPLAY_PIN_MOSI, spi_periph_signal[host].spid_out, false, false);
+    }
+}
+#endif
+
+void displayBusLock(void)
+{
+#if DISPLAY_SHARES_SD_BUS
+    __atomic_add_fetch(&busWaiters, 1, __ATOMIC_SEQ_CST);
+    xSemaphoreTake(busMutex, portMAX_DELAY);
+    __atomic_sub_fetch(&busWaiters, 1, __ATOMIC_SEQ_CST);
+    xSemaphoreGive(busTaken);
+    routePins(SD_SPI_HOST);
+#endif
+}
+
+void displayBusUnlock(void)
+{
+#if DISPLAY_SHARES_SD_BUS
+    xSemaphoreGive(busMutex);
+#endif
+}
+
+#if DISPLAY_SHARES_SD_BUS
+// display side: take the bus for a frame, hand it over between transfers
+static void holdBus(void)
+{
+    if (!busHeld)
+    {
+        xSemaphoreTake(busMutex, portMAX_DELAY);
+        busHeld = true;
+        routePins(DISPLAY_SPI_HOST);
+    }
+}
+
+static void releaseBus(void)
+{
+    if (busHeld)
+    {
+        busHeld = false;
+        xSemaphoreGive(busMutex);
+    }
+}
+
+static void yieldBus(void)
+{
+    if (!busHeld || !busWaiters)
+        return;
+    while (displayWaitOne());
+    xSemaphoreTake(busTaken, 0);        // a stale token from an earlier hand-over
+    releaseBus();
+    // block until the SD transaction got the bus: it may be a lower priority task
+    // on this core (e.g. the render worker loading a texture)
+    xSemaphoreTake(busTaken, pdMS_TO_TICKS(20));
+    holdBus();
+}
+#endif
+
 void displaySetWindow(int firstLine, int numLines)
 {
     uint16_t x0 = DISPLAY_X_OFFSET, x1 = DISPLAY_X_OFFSET + LCD_WIDTH - 1;
     uint16_t y0 = DISPLAY_Y_OFFSET + firstLine, y1 = y0 + numLines - 1;
     uint8_t caset[4] = { x0 >> 8, x0 & 0xFF, x1 >> 8, x1 & 0xFF };
     uint8_t raset[4] = { y0 >> 8, y0 & 0xFF, y1 >> 8, y1 & 0xFF };
+#if DISPLAY_SHARES_SD_BUS
+    holdBus();
+#endif
     sendCommand(CMD_CASET, caset, 4);
     sendCommand(CMD_RASET, raset, 4);
 #if IS_QSPI
@@ -211,6 +291,9 @@ void displaySetWindow(int firstLine, int numLines)
 
 void displaySendPixels(const uint16_t *data, size_t numPixels, bool last)
 {
+#if DISPLAY_SHARES_SD_BUS
+    yieldBus();
+#endif
     if (queuedCount == DISPLAY_MAX_QUEUED)
     {
         displayWaitOne();
@@ -262,6 +345,9 @@ int displayWaitOne(void)
 void displayWaitAll(void)
 {
     while (displayWaitOne());
+#if DISPLAY_SHARES_SD_BUS
+    releaseBus();
+#endif
     if (busAcquired)
     {
         spi_device_release_bus(spi);
@@ -271,6 +357,10 @@ void displayWaitAll(void)
 
 void displayInit(void)
 {
+#if DISPLAY_SHARES_SD_BUS
+    busMutex = xSemaphoreCreateMutex();
+    busTaken = xSemaphoreCreateBinary();
+#endif
     if (DISPLAY_PIN_MOSI < 0 || DISPLAY_PIN_SCLK < 0 || (!IS_QSPI && DISPLAY_PIN_DC < 0))
     {
         ESP_LOGE(TAG, "Display pins not configured, see board_config.h");

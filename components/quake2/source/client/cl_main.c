@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_main.c  -- client main loop
 
 #include "client.h"
+#include "../qcommon/q_perf.h"
 
 cvar_t	*freelook;
 
@@ -1702,6 +1703,12 @@ CL_Frame
 
 ==================
 */
+// ESP32: for the "perf" recorder (correlates the frames with a demo)
+int cl_serverframe_for_perf (void)
+{
+	return cl.frame.serverframe;
+}
+
 void CL_Frame (int msec)
 {
 	static int	extratime;
@@ -1760,10 +1767,36 @@ void CL_Frame (int msec)
 	if (!cl.refresh_prepped && cls.state == ca_active)
 		CL_PrepRefresh ();
 
+	// ESP32: the game is never shut down (power off, reset): config.cfg is
+	// written 2 s after a setting or a key binding was changed
+	{
+		static int	changed;
+
+		if (archive_modified)
+		{
+			archive_modified = false;
+			changed = cls.realtime ? cls.realtime : 1;
+		}
+		if (changed && cls.realtime - changed > 2000)
+		{
+			changed = 0;
+			CL_WriteConfiguration ();
+		}
+	}
+	// ESP32: the client is active only once the new map has a frame
+	// (CL_MediaFreed), so active and prepared means the new map can be drawn.
+	// CL_ParseFrame keeps the loading plaque when "changing" was executed
+	// after the new serverdata (same servercount: the first demo after a
+	// map), and then nothing was drawn until the plaque's 120 s timeout
+	if (cls.disable_screen && cls.state == ca_active && cl.refresh_prepped)
+		SCR_EndLoadingPlaque ();
+
 	// update the screen
 	if (host_speeds->value)
 		time_before_ref = Sys_Milliseconds ();
+	Perf_Push (PERF_RENDER);
 	SCR_UpdateScreen ();
+	Perf_Pop ();
 	if (host_speeds->value)
 		time_after_ref = Sys_Milliseconds ();
 

@@ -35,6 +35,7 @@
 #include "esp_input.h"
 #include "esp_console.h"
 #include "quake2.h"
+#include "qcommon/q_perf.h"
 
 #define GAME_TASK_STACK_SIZE    (32 * 1024)
 #define GAME_TASK_PRIORITY      5
@@ -103,12 +104,22 @@ void QG_Parallel2(void (*fn)(void *arg, int part), void *arg)
     xSemaphoreGive(workerGo);
     fn(arg, 0);
     int64_t t0 = esp_timer_get_time();
+    Perf_Push(PERF_PARALLEL);
     xSemaphoreTake(workerDone, portMAX_DELAY);
+    Perf_Pop();
     parallelWaitUs += esp_timer_get_time() - t0;
 }
 
 // time the game core waited for the other one (profiling, "cpu" command)
 int64_t parallelWaitUs;
+
+static TaskHandle_t gameTaskHandle;
+
+// the "perf" recorder only records the game task
+int QG_IsGameTask(void)
+{
+    return xTaskGetCurrentTaskHandle() == gameTaskHandle;
+}
 
 void QG_Quit(void)
 {
@@ -155,6 +166,34 @@ static void haltWithMessage(const char *msg)
     }
 }
 
+// The engine reads into PSRAM, which the SD card DMA cannot use: without this,
+// ESP-IDF reads one 512 byte sector per transaction through a temporary
+// buffer allocated each time. With a permanent internal DMA buffer the reads
+// are done SD_READ_CHUNK_SECTORS sectors at a time (FATFS serializes them).
+#define SD_READ_CHUNK_SECTORS   16
+static void sdSetReadBuffer(sdmmc_host_t *host)
+{
+    static void *buf;       // kept across mount retries
+    if (!buf)
+        buf = heap_caps_malloc(SD_READ_CHUNK_SECTORS * 512, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (buf)
+    {
+        host->dma_aligned_buffer = buf;
+        host->unaligned_multi_block_rw_max_chunk_size = SD_READ_CHUNK_SECTORS;
+    }
+}
+
+#if DISPLAY_SHARES_SD_BUS
+// SD transactions take turns with the display transfers (see displayBusLock())
+static esp_err_t sdTransaction(int slot, sdmmc_command_t *cmd)
+{
+    displayBusLock();
+    esp_err_t ret = sdspi_host_do_transaction(slot, cmd);
+    displayBusUnlock();
+    return ret;
+}
+#endif
+
 static esp_err_t mountSdCard(void)
 {
     esp_vfs_fat_sdmmc_mount_config_t mountConfig =
@@ -172,8 +211,12 @@ static esp_err_t mountSdCard(void)
         return ESP_ERR_INVALID_ARG;
     }
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+#if DISPLAY_SHARES_SD_BUS
+    host.do_transaction = sdTransaction;
+#endif
     host.slot = SD_SPI_HOST;
     host.max_freq_khz = SD_SPI_CLOCK_KHZ;
+    sdSetReadBuffer(&host);
     if (SD_SPI_HOST != DISPLAY_SPI_HOST)
     {
         spi_bus_config_t bus =
@@ -185,7 +228,10 @@ static esp_err_t mountSdCard(void)
             .quadhd_io_num = -1,
             .max_transfer_sz = 16384,
         };
+        // the pins may be shared with the display (on another controller): see displayBusLock()
+        displayBusLock();
         ret = spi_bus_initialize(SD_SPI_HOST, &bus, SDSPI_DEFAULT_DMA);
+        displayBusUnlock();
         if (ret != ESP_OK)
         {
             return ret;
@@ -209,6 +255,7 @@ static esp_err_t mountSdCard(void)
     }
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.max_freq_khz = SD_SDMMC_CLOCK_KHZ;
+    sdSetReadBuffer(&host);
     sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
     slot.clk = SD_PIN_SCLK;
     slot.cmd = SD_PIN_MOSI;
@@ -347,11 +394,11 @@ void app_main(void)
     // The stack should be in internal RAM for speed, but PSRAM works too
     // (measured: 0.4 ms per frame, the stack being cached; Bluetooth needs
     // the internal RAM more)
-    if (xTaskCreatePinnedToCoreWithCaps(gameTask, "quake2", GAME_TASK_STACK_SIZE, NULL, GAME_TASK_PRIORITY, NULL,
+    if (xTaskCreatePinnedToCoreWithCaps(gameTask, "quake2", GAME_TASK_STACK_SIZE, NULL, GAME_TASK_PRIORITY, &gameTaskHandle,
         GAME_TASK_CORE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS)
     {
         ESP_LOGW(TAG, "Not enough internal RAM for the game stack, using PSRAM");
-        xTaskCreatePinnedToCoreWithCaps(gameTask, "quake2", GAME_TASK_STACK_SIZE, NULL, GAME_TASK_PRIORITY, NULL,
+        xTaskCreatePinnedToCoreWithCaps(gameTask, "quake2", GAME_TASK_STACK_SIZE, NULL, GAME_TASK_PRIORITY, &gameTaskHandle,
             GAME_TASK_CORE, MALLOC_CAP_SPIRAM);
     }
 }

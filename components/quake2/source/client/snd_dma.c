@@ -125,10 +125,10 @@ void S_Init (void)
 		Com_Printf ("not initializing.\n");
 	else
 	{
-		s_volume = Cvar_Get ("s_volume", "0.7", CVAR_ARCHIVE);
+		s_volume = Cvar_Get ("s_volume", "0.1", CVAR_ARCHIVE);	// ESP32: quietest step of the menu slider
 		s_khz = Cvar_Get ("s_khz", "11", CVAR_ARCHIVE);
 		s_loadas8bit = Cvar_Get ("s_loadas8bit", "1", CVAR_ARCHIVE);
-		s_cachesize = Cvar_Get ("s_cachesize", "384", 0);
+		s_cachesize = Cvar_Get ("s_cachesize", "1536", 0);
 		s_mixahead = Cvar_Get ("s_mixahead", "0.2", CVAR_ARCHIVE);
 		s_show = Cvar_Get ("s_show", "0", 0);
 		s_testsound = Cvar_Get ("s_testsound", "0", 0);
@@ -373,7 +373,7 @@ S_EndRegistration
 */
 void S_EndRegistration (void)
 {
-	int		i;
+	int		i, preload;
 	sfx_t	*sfx;
 	int		size;
 
@@ -404,13 +404,14 @@ void S_EndRegistration (void)
 
 	}
 
-	// load everything in, as long as it fits in the sound cache: the other
-	// sounds are loaded when played
+	// load everything in, as long as it fits in the sound cache budget: the
+	// other sounds are loaded when played
+	preload = S_CacheBudget () * 3 / 4;
 	for (i=0, sfx=known_sfx ; i < num_sfx ; i++,sfx++)
 	{
 		if (!sfx->name[0])
 			continue;
-		if (snd_cache_bytes > s_cachesize->value * 1024 * 3 / 4)
+		if (snd_cache_bytes > preload)
 			break;
 		S_LoadSound (sfx);
 	}

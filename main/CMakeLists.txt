@@ -9,6 +9,8 @@ idf_component_register(
         esp_hid_parser.c
         esp_ble_hid.c
         esp_board_l2.c
+        esp_board_tdeck.c
+        esp_gt911.c
         esp_console.c
         font8x8.c
     INCLUDE_DIRS
@@ -31,7 +33,7 @@ idf_component_register(
         bt
         esp_hid
 )
-# Board selection from the command line: -DBOARD=BOARD_GENERIC
+# Board selection from the command line: -DBOARD=BOARD_LILYGO_TDECK
 if(DEFINED BOARD)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE BOARD=${BOARD})
 endif()

@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "r_local.h"
+#include "../qcommon/q_perf.h"
 #include "../other/q_arena.h"
 
 int		FS_FOpenFile (char *filename, FILE **file);
@@ -653,7 +654,7 @@ R_FindImage
 Finds or loads the given image
 ===============
 */
-image_t	*R_FindImage (char *name, imagetype_t type)
+static image_t *R_FindImage_ (char *name, imagetype_t type)
 {
 	image_t	*image;
 	int		i, len;
@@ -827,3 +828,16 @@ void	R_ShutdownImages (void)
 	}
 }
 
+// ESP32: timed for the "perf" recorder
+image_t	*R_FindImage (char *name, imagetype_t type)
+{
+	image_t	*image;
+	int		opens = perf_active ? Perf_EventCount (PERF_EV_OPENS) : 0;
+
+	Perf_Push (PERF_ASSET);
+	image = R_FindImage_ (name, type);
+	Perf_Pop ();
+	if (perf_active && Perf_EventCount (PERF_EV_OPENS) != opens)
+		Perf_Count (PERF_EV_IMAGES, 1);
+	return image;
+}

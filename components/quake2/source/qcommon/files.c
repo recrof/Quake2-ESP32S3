@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "qcommon.h"
+#include "q_perf.h"
 #include "../other/q_arena.h"
 
 // define this to dissalow any data but the demo pak file
@@ -208,6 +209,80 @@ int	Developer_searchpath (int who)
 }
 
 
+#ifdef ESP_PLATFORM
+/*
+ESP32: the files in the paks are read through a small pool of pak handles
+that stay open, instead of opening the pak file again for each one: on
+FATFS, opening a large file walks its whole cluster chain (fast seek
+table), about 100 ms on an SD card on SPI. fclose is wrapped (linker
+--wrap=fclose) to give a pooled handle back instead of closing it.
+The slots are claimed with atomics: the render worker may load images.
+*/
+#define PAK_POOL_SIZE	8
+enum { POOL_EMPTY, POOL_FREE, POOL_BUSY };
+typedef struct
+{
+	int		state;
+	FILE	*f;
+	pack_t	*pak;
+} pakhandle_t;
+static pakhandle_t	pak_pool[PAK_POOL_SIZE];
+
+static int FS_PoolClaim (int i, int from)
+{
+	int expected = from;
+	return __atomic_compare_exchange_n (&pak_pool[i].state, &expected, POOL_BUSY, 0,
+		__ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+
+static FILE *FS_OpenInPak (pack_t *pak)
+{
+	int		i;
+	FILE	*f;
+
+	for (i = 0; i < PAK_POOL_SIZE; i++)
+		if (pak_pool[i].pak == pak && pak_pool[i].state == POOL_FREE && FS_PoolClaim (i, POOL_FREE))
+		{
+			if (pak_pool[i].pak == pak)
+			{
+				clearerr (pak_pool[i].f);
+				return pak_pool[i].f;
+			}
+			__atomic_store_n (&pak_pool[i].state, POOL_FREE, __ATOMIC_RELEASE);
+		}
+	f = fopen (pak->filename, "rb");
+	if (!f)
+		return NULL;
+	for (i = 0; i < PAK_POOL_SIZE; i++)
+		if (pak_pool[i].state == POOL_EMPTY && FS_PoolClaim (i, POOL_EMPTY))
+		{
+			pak_pool[i].f = f;
+			pak_pool[i].pak = pak;
+			break;
+		}
+	return f;		// pool full: a plain file, closed by fclose
+}
+
+int __real_fclose (FILE *f);
+int __wrap_fclose (FILE *f)
+{
+	int		i;
+
+	for (i = 0; i < PAK_POOL_SIZE; i++)
+		if (pak_pool[i].f == f && pak_pool[i].state == POOL_BUSY)
+		{
+			__atomic_store_n (&pak_pool[i].state, POOL_FREE, __ATOMIC_RELEASE);
+			return 0;
+		}
+	return __real_fclose (f);
+}
+#else
+static FILE *FS_OpenInPak (pack_t *pak)
+{
+	return fopen (pak->filename, "rb");
+}
+#endif
+
 /*
 ===========
 FS_FOpenFile
@@ -220,7 +295,7 @@ a seperate file.
 */
 int file_from_pak = 0;
 #ifndef NO_ADDONS
-int FS_FOpenFile (char *filename, FILE **file)
+static int FS_FOpenFile_ (char *filename, FILE **file)
 {
 	unsigned		hash = FS_HashName (filename);
 	searchpath_t	*search;
@@ -263,7 +338,7 @@ int FS_FOpenFile (char *filename, FILE **file)
 					file_from_pak = 1;
 					Com_DPrintf ("PackFile: %s : %s\n",pak->filename, filename);
 				// open a new file on the pakfile
-					*file = fopen (pak->filename, "rb");
+					*file = FS_OpenInPak (pak);
 					if (!*file)
 						Com_Error (ERR_FATAL, "Couldn't reopen %s", pak->filename);	
 					fseek (*file, pak->files[i].filepos, SEEK_SET);
@@ -297,7 +372,7 @@ int FS_FOpenFile (char *filename, FILE **file)
 
 // this is just for demos to prevent add on hacking
 
-int FS_FOpenFile (char *filename, FILE **file)
+static int FS_FOpenFile_ (char *filename, FILE **file)
 {
 	unsigned		hash = FS_HashName (filename);
 	searchpath_t	*search;
@@ -353,6 +428,36 @@ int FS_FOpenFile (char *filename, FILE **file)
 #endif
 
 
+#ifdef ESP_PLATFORM
+#define FS_STDIO_BUFFER	(8 * 1024)
+// a FILE that was already given the big buffer (pooled pak handle)
+static qboolean FS_HasBigBuffer (FILE *f)
+{
+	return f->_bf._size >= FS_STDIO_BUFFER;
+}
+#endif
+
+// ESP32: timed for the "perf" recorder
+int FS_FOpenFile (char *filename, FILE **file)
+{
+	int		len;
+
+	Perf_Push (PERF_FILE);
+	len = FS_FOpenFile_ (filename, file);
+#ifdef ESP_PLATFORM
+	// newlib's default stdio buffer (128 bytes) turns the reads into FATFS
+	// reads of 128 bytes, one SD sector at a time: with 8 kB, the SD card
+	// reads 16 sectors at a time (unbuffered, the many small reads are slow).
+	// A pooled pak handle keeps its buffer.
+	if (*file && !FS_HasBigBuffer (*file))
+		setvbuf (*file, NULL, _IOFBF, FS_STDIO_BUFFER);
+#endif
+	Perf_Pop ();
+	if (*file)
+		Perf_Count (PERF_EV_OPENS, 1);
+	return len;
+}
+
 /*
 =================
 FS_ReadFile
@@ -362,7 +467,7 @@ Properly handles partial reads
 */
 void CDAudio_Stop(void);
 #define	MAX_READ	0x10000		// read in blocks of 64k
-void FS_Read (void *buffer, int len, FILE *f)
+static void FS_Read_ (void *buffer, int len, FILE *f)
 {
 	int		block, remaining;
 	int		read;
@@ -451,6 +556,15 @@ int FS_LoadFile (char *path, void **buffer)
 	return len;
 }
 
+// ESP32: timed for the "perf" recorder
+void FS_Read (void *buffer, int len, FILE *f)
+{
+	Perf_Push (PERF_FILE);
+	FS_Read_ (buffer, len, f);
+	Perf_Pop ();
+	Perf_Count (PERF_EV_KB, len);
+}
+
 /*
 ============
 FS_ReadAt
@@ -462,9 +576,11 @@ read the BSP lumps one at a time instead of loading the whole map.
 */
 void FS_ReadAt (FILE *h, int base, int ofs, void *buffer, int len)
 {
+	Perf_Push (PERF_FILE);
 	if (fseek (h, base + ofs, SEEK_SET))
 		Com_Error (ERR_FATAL, "FS_ReadAt: seek failed");
 	FS_Read (buffer, len, h);
+	Perf_Pop ();
 }
 
 

@@ -1,0 +1,7 @@
+# LilyGO T-Deck: applied after sdkconfig.defaults (-DBOARD=BOARD_LILYGO_TDECK).
+# Its in-package flash (XMC, id 0x464018) runs at 120 MHz with ESP-IDF's HPM-DC mode:
+# the app changes the flash dummy cycles, so the bootloader must be DC-aware
+# (it starts in DOUT mode and resets the flash to its default dummy cycles).
+CONFIG_BOOTLOADER_FLASH_DC_AWARE=y
+CONFIG_SPI_FLASH_HPM_DC_AUTO=y
+# CONFIG_SPI_FLASH_HPM_DC_DISABLE is not set

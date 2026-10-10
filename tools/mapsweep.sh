@@ -1,12 +1,13 @@
 #!/bin/sh
 # Loads maps one after the other through the serial logger (tools/logger.sh)
 # and reports errors, fps and memory: tools/mapsweep.sh <logger workdir> map...
+# (WAIT=<seconds> per map, default 50)
 S=$1
 shift
 for m in "$@"; do
     : > "$S/console.log"
     echo "map $m" >> "$S/commands"
-    sleep 50
+    sleep ${WAIT:-50}
     echo mem >> "$S/commands"
     sleep 2
     r=$(grep -av "models/" "$S/console.log" | grep -am1 "ERROR:\|Error" | cut -c10-120)

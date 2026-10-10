@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // snd_mem.c: sound caching
 
 #include "client.h"
+#include "../qcommon/q_perf.h"
 #include "snd_loc.h"
 
 int			cache_full_cycle;
@@ -44,11 +45,24 @@ void S_PurgeCache (void)
 	S_MakeRoom (0x3fffffff);
 }
 
+#define SND_ARENA_RESERVE	(192 * 1024)	// arena memory the sound cache leaves free (when
+										// an allocation fails, the sounds are freed anyway)
+int Q_Arena_FreeSize (void);
+
 // Frees cached sounds (least recently used first, not playing) until size
-// more bytes fit in the budget
-void S_MakeRoom (int size)
+// more bytes fit in the budget: s_cachesize, or less when the engine memory
+// is low (the sounds are reloaded from the SD card when played again)
+int S_CacheBudget (void)
 {
 	int		budget = (int)s_cachesize->value * 1024;
+	int		avail = snd_cache_bytes + Q_Arena_FreeSize () - SND_ARENA_RESERVE;
+
+	return avail < budget ? avail : budget;
+}
+
+void S_MakeRoom (int size)
+{
+	int		budget = S_CacheBudget ();
 
 	while (snd_cache_bytes + size > budget)
 	{
@@ -232,7 +246,9 @@ static wavinfo_t S_ReadWavinfo (char *name, FILE *h, int base, int filelen)
 S_LoadSound
 ==============
 */
-sfxcache_t *S_LoadSound (sfx_t *s)
+#define SND_READ_BLOCK	(32 * 1024)
+
+static sfxcache_t *S_LoadSound_ (sfx_t *s)
 {
     char	namebuffer[MAX_QPATH];
 	wavinfo_t	info;
@@ -242,7 +258,16 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 	sfxcache_t	*sc;
 	char	*name;
 	FILE	*h;
-	byte	inbuf[2048];
+	byte	smallbuf[2048], *inbuf;
+	int		insize;
+	// ESP32: the samples are read in large blocks (32 kB): on an SD card on
+	// SPI, every read is a few ms of overhead
+	static byte	*readbuf;
+
+	if (!readbuf)
+		readbuf = malloc (SND_READ_BLOCK);
+	inbuf = readbuf ? readbuf : smallbuf;
+	insize = readbuf ? SND_READ_BLOCK : sizeof(smallbuf);
 
 	if (s->name[0] == '*')
 		return NULL;
@@ -293,13 +318,13 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 	// ESP32: the sound cache has a budget (s_cachesize kB), the least
 	// recently used sounds that are not playing are freed to make room
 	S_MakeRoom (len + sizeof(sfxcache_t));
-	sc = s->cache = Z_TryMalloc (len + sizeof(sfxcache_t));
+	sc = s->cache = Z_TryMallocTop (len + sizeof(sfxcache_t));
 	if (!sc)
 	{
 		// out of memory: free all the cached sounds that are not playing and
 		// try again, else play without this sound
 		S_MakeRoom (0x3fffffff);
-		sc = s->cache = Z_TryMalloc (len + sizeof(sfxcache_t));
+		sc = s->cache = Z_TryMallocTop (len + sizeof(sfxcache_t));
 		if (!sc)
 		{
 			Com_DPrintf ("S_LoadSound: no memory for %s\n", s->name);
@@ -330,8 +355,8 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 		{
 			inbase = srcsample;
 			incount = info.samples - inbase;
-			if (incount > sizeof(inbuf) / info.width)
-				incount = sizeof(inbuf) / info.width;
+			if (incount > insize / info.width)
+				incount = insize / info.width;
 			FS_ReadAt (h, base, info.dataofs + inbase * info.width, inbuf, incount * info.width);
 		}
 		if (info.width == 2)
@@ -536,3 +561,17 @@ wavinfo_t GetWavinfo (char *name, byte *wav, int wavlength)
 	return info;
 }
 
+// ESP32: timed for the "perf" recorder
+sfxcache_t *S_LoadSound (sfx_t *s)
+{
+	sfxcache_t	*sc;
+
+	if (s->cache)
+		return S_LoadSound_ (s);	// cached: no loading
+	Perf_Push (PERF_SOUND);
+	sc = S_LoadSound_ (s);
+	Perf_Pop ();
+	if (sc)
+		Perf_Count (PERF_EV_SOUNDS, 1);
+	return sc;
+}

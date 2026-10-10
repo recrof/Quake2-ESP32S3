@@ -2,7 +2,9 @@
 
 A port of id Software's Quake II to the ESP32-S3, running the full retail game on the
 [Seeed Wio Tracker L2](https://wiki.seeedstudio.com/meshtastic_wio_tracker_l2_intro/)
-(ESP32-S3, 8 MB PSRAM, 16 MB flash, 320x240 screen, microSD, speaker, touch screen).
+(ESP32-S3, 8 MB PSRAM, 16 MB flash, 320x240 screen, microSD, speaker, touch screen) and the
+[LilyGO T-Deck](https://lilygo.cc/products/t-deck) (same chip, 320x240 screen, microSD,
+speaker, touch screen, keyboard and trackball).
 
 The engine comes from the ESP32-P4 port [ESP32_QUAKE2](https://github.com/alexkid77) by
 Alejandro Villegas Alonso, itself based on [quake2generic](https://github.com/ozkl/quake2generic)
@@ -21,7 +23,7 @@ fits in the 8 MB of PSRAM of the ESP32-S3 (5.9 MB left for the game data):
   (`tools/mkassets.py`) and used in place: they take no PSRAM.
 - The wall textures are used from mip level 1 (half resolution, `sw_mipcap 1`), and level 0
   is not loaded (except for water, sky and translucent surfaces).
-- Sound cache with a budget (`s_cachesize`, 384 kB) and least recently used eviction; sounds
+- Sound cache with a budget (`s_cachesize`, 1.5 MB, less when memory is low) and least recently used eviction; sounds
   are resampled to 11 kHz 8-bit.
 - Smaller surface cache (288 kB), particle and image limits, no OpenGL data in the models,
   monster animation tables in flash, and many large static buffers allocated on demand.
@@ -30,8 +32,9 @@ fits in the 8 MB of PSRAM of the ESP32-S3 (5.9 MB left for the game data):
 
 The whole single player game (all units and secret levels) loads and plays, with sound
 and level changes within and between units (save games are not tested much yet). Frame
-rate: 15-25 fps in game, 21.5 fps in the `demo1` timedemo. The largest maps (`lab`, `hangar2`, `city3`) leave a few hundred kB of
-PSRAM free. Multiplayer and mods are not supported.
+rate: 15-30 fps in game, 25 fps in the `demo1` timedemo (T-Deck: 24 fps). The largest
+maps (`lab`, `hangar2`, `city3`) leave a few hundred kB of PSRAM free. Multiplayer and
+mods are not supported.
 
 ## Performance
 
@@ -80,6 +83,13 @@ tools/flash.sh assets     # firmware and gamedata/assets.bin (14 MB, once)
 tools/flash.sh            # firmware only
 ```
 
+For the T-Deck, build in its own directory with its own `sdkconfig`:
+
+```sh
+cmake -G Ninja -B build-tdeck -DPYTHON_DEPS_CHECKED=1 -DBOARD=BOARD_LILYGO_TDECK -DSDKCONFIG=build-tdeck/sdkconfig
+BUILD=build-tdeck tools/flash.sh assets
+```
+
 `tools/flash.sh` builds before flashing. With several boards connected it does not guess:
 give the port, `PORT=/dev/cu.usbmodem3101 tools/flash.sh`. After changing
 `sdkconfig.defaults`, delete `sdkconfig` and run `cmake` again.
@@ -96,7 +106,26 @@ If flashing fails, hold BOOT and press RESET to enter the download mode.
 - MENU in the top left corner
 - in menus and the console: swipe for the arrow keys, tap for enter
 
-**BOOT button**: menu (escape).
+**BOOT button**: menu (escape) on the Wio Tracker L2.
+
+**T-Deck keyboard and trackball**:
+
+| Key | Game | Menus |
+|---|---|---|
+| W / S | forward / back | |
+| A / D | strafe left / right | |
+| E, trackball click | fire | enter |
+| Q | next weapon | |
+| space / C | jump / crouch | |
+| Shift | run | |
+| Sym + 1-0 | select a weapon | |
+| Alt | menu | escape |
+| Mic | console | console |
+| Speaker / Enter | inventory / use item | |
+| trackball | turn, look | arrows |
+
+The keyboard needs the LilyGO keyboard firmware from June 2025 or later to hold keys; older
+firmware sends one character per key press, and each key is released shortly after.
 
 **Bluetooth LE gamepad, keyboard or mouse**: the board scans for BLE HID devices and connects
 to the first one found (bonded devices first) and reconnects to it later. To pair a new
@@ -128,6 +157,7 @@ The USB serial port is a Quake console: any line is a console command (`map base
 | `sysmem`, `tasks` | ESP-IDF heap and task stacks |
 | `cpu` | CPU use per task, time spent waiting for the second core and the display |
 | `prof [ms]` | sampling profiler of the game core (see `tools/profile.py`) |
+| `perf start [frames]`, `perf dump` | time of each part of every drawn frame: rendering, waiting for the second core or the display, SD card reads, sound and image loading (see `tools/perfgraph.py`) |
 | `ls <dir>`, `put` | SD card listing and upload (see `tools/sdput.py`) |
 | `reboot`, `start` | restart, start the game after a crash |
 
@@ -150,6 +180,7 @@ crashing again: press RESET to play.
 | `tools/sdput.py` | copy files to the SD card over USB |
 | `tools/mapsweep.sh` | load maps one after the other and report errors, fps and memory |
 | `tools/profile.py` | per function histogram of a `prof` capture: `tools/profile.py console.log build/Quake2ESP32S3.elf` |
+| `tools/perfgraph.py` | interactive per frame graph (HTML) of a `perf dump` capture: `tools/perfgraph.py console.log` |
 
 ## Host build
 

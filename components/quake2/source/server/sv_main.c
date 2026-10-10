@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "server.h"
+#include "../qcommon/q_perf.h"
 
 netadr_t	master_adr[MAX_MASTERS];	// address of group servers
 
@@ -738,7 +739,9 @@ void SV_RunGameFrame (void)
 	// don't run if paused
 	if (!sv_paused->value || maxclients->value > 1)
 	{
+		Perf_Push (PERF_GAME);
 		ge->RunFrame ();
+		Perf_Pop ();
 
 		// never get more than one tic behind
 		if (sv.time < svs.realtime)

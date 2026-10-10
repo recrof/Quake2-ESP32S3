@@ -521,7 +521,8 @@ void Key_SetBinding (int keynum, char *binding)
 	new = Z_Malloc (l+1);
 	strcpy (new, binding);
 	new[l] = 0;
-	keybindings[keynum] = new;	
+	keybindings[keynum] = new;
+	archive_modified = true;	// ESP32: config.cfg written soon (CL_Frame)
 }
 
 /*

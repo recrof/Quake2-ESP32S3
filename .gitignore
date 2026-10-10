@@ -10,3 +10,4 @@ host/q2host*
 gamedata/
 *.pak
 *.PAK
+__pycache__/

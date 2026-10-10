@@ -26,6 +26,7 @@
 #include "esp_touch.h"
 #include "esp_video.h"
 #include "font8x8.h"
+#include "qcommon/q_perf.h"
 
 #define FRAME_WIDTH             320
 #define FRAME_HEIGHT            240
@@ -118,12 +119,14 @@ int64_t submitWaitUs, submitCopyUs;     // profiling ("cpu" command)
 static void submitFrame(const uint8_t *pixels)
 {
     int64_t t0 = esp_timer_get_time();
+    Perf_Push(PERF_PRESENT);
     xSemaphoreTake(frameDone, portMAX_DELAY);
     int64_t t1 = esp_timer_get_time();
     if (pixels != frontBuffer)
     {
         memcpy(frontBuffer, pixels, FRAME_WIDTH * FRAME_HEIGHT);
     }
+    Perf_Pop();
     submitWaitUs += t1 - t0;
     submitCopyUs += esp_timer_get_time() - t1;
     memcpy(framePalette, palette, sizeof(framePalette));

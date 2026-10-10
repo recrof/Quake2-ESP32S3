@@ -33,6 +33,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
   */
 
 #include "client.h"
+#include "../qcommon/q_perf.h"
 
 float		scr_con_current;	// aproaches scr_conlines at scr_conspeed
 float		scr_conlines;		// 0.0 to 1.0 lines of console to display
@@ -659,6 +660,7 @@ void SCR_TimeRefresh_f (void)
 			re.RenderFrame (&cl.refdef);
 		}
 		re.EndFrame();
+		Perf_FrameDrawn ();
 	}
 	else
 	{
@@ -669,6 +671,7 @@ void SCR_TimeRefresh_f (void)
 			re.BeginFrame( 0 );
 			re.RenderFrame (&cl.refdef);
 			re.EndFrame();
+			Perf_FrameDrawn ();
 		}
 	}
 
@@ -1419,4 +1422,5 @@ void SCR_UpdateScreen (void)
 		}
 	}
 	re.EndFrame();
+	Perf_FrameDrawn ();
 }

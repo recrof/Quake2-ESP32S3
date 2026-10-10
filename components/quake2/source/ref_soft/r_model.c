@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // on the same machine.
 
 #include "r_local.h"
+#include "../qcommon/q_perf.h"
 #include "../other/q_arena.h"
 
 // the renderer is linked with the engine: read the BSP lumps directly
@@ -105,7 +106,7 @@ Mod_ForName
 Loads in a model for the given name
 ==================
 */
-model_t *Mod_ForName (char *name, qboolean crash)
+static model_t *Mod_ForName_ (char *name, qboolean crash)
 {
 	model_t	*mod;
 	unsigned *buf;
@@ -1460,4 +1461,18 @@ void Mod_FreeAll (void)
 		if (mod_known[i].extradatasize || mod_known[i].extradata)
 			Mod_Free (&mod_known[i]);
 	}
+}
+
+// ESP32: timed for the "perf" recorder
+model_t *Mod_ForName (char *name, qboolean crash)
+{
+	model_t	*mod;
+	int		opens = perf_active ? Perf_EventCount (PERF_EV_OPENS) : 0;
+
+	Perf_Push (PERF_ASSET);
+	mod = Mod_ForName_ (name, crash);
+	Perf_Pop ();
+	if (perf_active && Perf_EventCount (PERF_EV_OPENS) != opens)
+		Perf_Count (PERF_EV_IMAGES, 1);
+	return mod;
 }

@@ -36,6 +36,11 @@ void QG_Parallel2(void (*fn)(void *arg, int part), void *arg)
 	fn(arg, 1);
 }
 
+int QG_IsGameTask(void)
+{
+	return 1;
+}
+
 int QG_Microseconds(void)
 {
 	struct timeval tv;
@@ -352,6 +357,9 @@ int main(int argc, char **argv)
 		if (frame == shot_frame)
 			Host_SaveShot(shot_file);
 	}
+	// a "perf start" capture is printed at the end of a -frames run
+	extern void Cmd_ExecuteString(char *text);
+	Cmd_ExecuteString("perf dump");
 	Mem_Report();
 	return 0;
 }

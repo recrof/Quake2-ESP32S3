@@ -248,6 +248,8 @@ cvar_t *Cvar_Set2 (char *var_name, char *value, qboolean force)
 		return var;		// not changed
 
 	var->modified = true;
+	if (var->flags & CVAR_ARCHIVE)
+		archive_modified = true;	// ESP32: config.cfg written soon (CL_Frame)
 
 	if (var->flags & CVAR_USERINFO)
 		userinfo_modified = true;	// transmit at next oportunity
@@ -296,6 +298,8 @@ cvar_t *Cvar_FullSet (char *var_name, char *value, int flags)
 	}
 
 	var->modified = true;
+	if (var->flags & CVAR_ARCHIVE)
+		archive_modified = true;	// ESP32: config.cfg written soon (CL_Frame)
 
 	if (var->flags & CVAR_USERINFO)
 		userinfo_modified = true;	// transmit at next oportunity
@@ -483,6 +487,7 @@ void Cvar_List_f (void)
 
 
 qboolean userinfo_modified;
+qboolean archive_modified;	// ESP32: an archived cvar or a key binding changed
 
 
 char	*Cvar_BitInfo (int bit)
