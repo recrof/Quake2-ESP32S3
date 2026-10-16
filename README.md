@@ -20,7 +20,7 @@ fits in the 8 MB of PSRAM of the ESP32-S3 (5.9 MB left for the game data):
   for the collision and the render models); the collision map is allocated for the map
   instead of using fixed arrays (3 MB); the renderer shares its planes and visibility data.
 - The models (MD2) and their skins are stored in their in-memory format in a flash partition
-  (`tools/mkassets.py`) and used in place: they take no PSRAM.
+  (copied there from the PAK files on the first start) and used in place: they take no PSRAM.
 - The wall textures are used from mip level 1 (half resolution, `sw_mipcap 1`), and level 0
   is not loaded (except for water, sky and translucent surfaces).
 - Sound cache with a budget (`s_cachesize`, 1.5 MB, less when memory is low) and least recently used eviction; sounds
@@ -65,7 +65,9 @@ The other files of a Quake II installation (`.exe`, `.dll`, mods, `players`, `.t
 are not needed. The data can also be copied without taking the card out, with the firmware
 running: `tools/sdput.py baseq2/pak0.pak ...` (slow: USB full speed).
 
-Then build the flash asset image from the same PAK files (needs Python 3):
+On the first start, the board copies the models and skins from the PAK files to its flash
+(about 100 seconds, with the progress on the screen), and again when the PAK files change.
+To skip that, the image can be built on a computer and flashed (needs Python 3):
 
 ```sh
 python3 tools/mkassets.py gamedata/assets.bin pak2.pak pak1.pak pak0.pak
@@ -79,8 +81,8 @@ toolchain):
 ```sh
 cmake -G Ninja -B build -DPYTHON_DEPS_CHECKED=1
 ninja -C build
-tools/flash.sh assets     # firmware and gamedata/assets.bin (14 MB, once)
-tools/flash.sh            # firmware only
+tools/flash.sh            # firmware
+tools/flash.sh assets     # and gamedata/assets.bin (optional)
 ```
 
 For the T-Deck, build in its own directory with its own `sdkconfig`:
@@ -95,6 +97,11 @@ give the port, `PORT=/dev/cu.usbmodem3101 tools/flash.sh`. After changing
 `sdkconfig.defaults`, delete `sdkconfig` and run `cmake` again.
 
 If flashing fails, hold BOOT and press RESET to enter the download mode.
+
+`tools/merge.sh` (`BUILD=build-tdeck` for the T-Deck) makes a single image in `dist/` to
+flash at 0x0 with any ESP32-S3 flasher, e.g.
+`esptool.py --chip esp32s3 write_flash 0x0 quake2-build.bin`: with the PAK files on the SD
+card, nothing else is needed.
 
 ## Controls
 
@@ -175,6 +182,7 @@ crashing again: press RESET to play.
 | Tool | |
 |---|---|
 | `tools/flash.sh [assets]` | build and flash (`PORT=...`) |
+| `tools/merge.sh [out.bin]` | single firmware image to flash at 0x0 (`BUILD=...`) |
 | `tools/mkassets.py` | flash asset image (models and skins) from the PAK files |
 | `tools/logger.sh`, `tools/serial_daemon.py` | serial console logger, screenshots |
 | `tools/sdput.py` | copy files to the SD card over USB |

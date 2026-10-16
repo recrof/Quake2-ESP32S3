@@ -15,6 +15,7 @@
 #include "quake2.h"
 #include "client/keys.h"
 #include "client/snd_loc.h"
+#include "other/q_assets.h"
 
 #define SCALE 3
 
@@ -290,6 +291,11 @@ void SNDDMA_Submit(void)
 
 void Mem_Report(void);
 
+static int hostAssetWrite(void *ctx, int offset, const void *data, int size)
+{
+	return fseek(ctx, offset, SEEK_SET) == 0 && (int)fwrite(data, 1, size, ctx) == size;
+}
+
 int main(int argc, char **argv)
 {
 	char *qargv[64];
@@ -313,6 +319,19 @@ int main(int argc, char **argv)
 			qargv[qargc++] = argv[i];
 	}
 	qargv[qargc] = NULL;
+	// Q2ASSETS_BUILD=<file>: builds the flash asset image from the PAK files of
+	// <basedir>/baseq2 as the ESP32 does (Q_Assets_Build), then exits
+	if (getenv("Q2ASSETS_BUILD")) {
+		char dir[512];
+		snprintf(dir, sizeof(dir), "%s/baseq2", getenv("Q2BASEDIR") ? getenv("Q2BASEDIR") : ".");
+		FILE *out = fopen(getenv("Q2ASSETS_BUILD"), "wb");
+		assetwriter_t w = { hostAssetWrite, NULL, out };
+		int n = out ? Q_Assets_Build(dir, 0xE30000, &w) : -1;
+		if (out)
+			fclose(out);
+		printf("key %08x\n", Q_Assets_SourceKey(dir));
+		return n < 0;
+	}
 	// Q2ASSETS=<file>: flash asset image (tools/mkassets.py), as mapped on the ESP32
 	if (getenv("Q2ASSETS")) {
 		extern int Q_Assets_Init(const void *base, int size);

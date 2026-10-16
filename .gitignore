@@ -11,3 +11,4 @@ gamedata/
 *.pak
 *.PAK
 __pycache__/
+dist/

@@ -183,7 +183,7 @@ static void listDir(const char *path)
     struct dirent *e;
     while ((e = readdir(d)))
     {
-        char full[MAX_LINE + 64];
+        char full[MAX_LINE + 300];      // path and a FAT name (255)
         struct stat st;
         snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
         if (!stat(full, &st))

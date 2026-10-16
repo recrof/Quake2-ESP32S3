@@ -8,6 +8,8 @@
 void videoInit(void);
 // Prints a line on the boot console (and on the serial console)
 void videoPrintf(const char *format, ...) __attribute__((format(printf, 1, 2)));
+// Replaces the last line of the boot console (progress)
+void videoReplaceLine(const char *format, ...) __attribute__((format(printf, 1, 2)));
 // Switches back to the text console (fatal errors)
 void videoConsoleMode(void);
 float videoTakeFps(void);

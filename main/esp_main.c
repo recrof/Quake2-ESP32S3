@@ -12,6 +12,7 @@
  *  of the License, or (at your option) any later version.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
@@ -36,11 +37,13 @@
 #include "esp_console.h"
 #include "quake2.h"
 #include "qcommon/q_perf.h"
+#include "other/q_assets.h"
 
 #define GAME_TASK_STACK_SIZE    (32 * 1024)
 #define GAME_TASK_PRIORITY      5
 #define GAME_TASK_CORE          1
 #define STATS_INTERVAL_US       5000000
+#define ASSET_BOUNCE_SIZE       4096
 
 static const char *TAG = "quake2";
 
@@ -278,11 +281,56 @@ static esp_err_t mountSdCard(void)
     return ret;
 }
 
-// Maps the flash asset partition (models and skins used in place, see
-// tools/mkassets.py)
+// Flash asset image (models and skins used in place, see q_assets.c): built from the
+// PAK files on the first start, and again when the PAK files change (or another game
+// was flashed). Writing the flash takes most of the time (erasing 64 kB blocks ahead).
+typedef struct
+{
+    const esp_partition_t *part;
+    uint32_t erased;
+    uint8_t *bounce;                // the data is in PSRAM, which can't be read while the flash is written
+    int percent;
+    int64_t start;
+} AssetWriter;
+
+static int assetWrite(void *ctx, int offset, const void *data, int size)
+{
+    AssetWriter *w = ctx;
+    while (w->erased < (uint32_t) (offset + size))
+    {
+        uint32_t block = w->part->size - w->erased >= 0x10000 ? 0x10000 : w->part->erase_size;
+        if (esp_partition_erase_range(w->part, w->erased, block) != ESP_OK)
+        {
+            return 0;
+        }
+        w->erased += block;
+    }
+    for (int done = 0; done < size;)
+    {
+        int n = size - done < ASSET_BOUNCE_SIZE ? size - done : ASSET_BOUNCE_SIZE;
+        memcpy(w->bounce, (const uint8_t *) data + done, n);
+        if (esp_partition_write(w->part, offset + done, w->bounce, n) != ESP_OK)
+        {
+            return 0;
+        }
+        done += n;
+    }
+    return 1;
+}
+
+static void assetProgress(void *ctx, int done, int total)
+{
+    AssetWriter *w = ctx;
+    int percent = done * 100 / total;
+    if (percent != w->percent)
+    {
+        w->percent = percent;
+        videoReplaceLine("Models and skins: %d %% (%d s)", percent, (int) ((esp_timer_get_time() - w->start) / 1000000));
+    }
+}
+
 static void mapAssets(void)
 {
-    extern int Q_Assets_Init(const void *base, int size);
     const esp_partition_t *part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "assets");
     const void *ptr;
     esp_partition_mmap_handle_t handle;
@@ -291,9 +339,28 @@ static void mapAssets(void)
         videoPrintf("No flash asset partition");
         return;
     }
+    unsigned key = Q_Assets_SourceKey(SD_MOUNT_POINT "/baseq2");
+    if (!Q_Assets_Current(ptr, part->size, key))
+    {
+        videoPrintf("Copying the models and skins to flash");
+        videoPrintf("(once, about 2 minutes)...");
+        videoPrintf(" ");      // replaced by the progress
+        AssetWriter w = { .part = part, .percent = -1, .start = esp_timer_get_time() };
+        w.bounce = heap_caps_malloc(ASSET_BOUNCE_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        assetwriter_t writer = { assetWrite, assetProgress, &w };
+        int n = w.bounce ? Q_Assets_Build(SD_MOUNT_POINT "/baseq2", part->size, &writer) : -1;
+        free(w.bounce);
+        if (n < 0)
+        {
+            videoPrintf("Failed: the game runs without them (less memory)");
+        }
+        else
+        {
+            videoPrintf("Done in %d s", (int) ((esp_timer_get_time() - w.start) / 1000000));
+        }
+    }
     if (!Q_Assets_Init(ptr, part->size))
     {
-        videoPrintf("Flash assets not written: see README");
         esp_partition_munmap(handle);
     }
 }

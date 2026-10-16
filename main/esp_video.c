@@ -214,19 +214,20 @@ static void consolePutChar(char c, int x, int y, int color)
     }
 }
 
-void videoPrintf(const char *format, ...)
+static void consolePrint(bool replace, const char *format, va_list va)
 {
     char text[FRAME_WIDTH / 8 + 1];
-    va_list va;
-    va_start(va, format);
     vsnprintf(text, sizeof(text), format, va);
-    va_end(va);
     printf("%s\n", text);
     if (!consoleActive || !frontBuffer)
     {
         return;
     }
     xSemaphoreTake(frameDone, portMAX_DELAY);
+    if (replace && consoleLine > 0)
+    {
+        consoleLine--;
+    }
     if (consoleLine >= FRAME_HEIGHT / 8)
     {
         memmove(frontBuffer, frontBuffer + 8 * FRAME_WIDTH, (FRAME_HEIGHT - 8) * FRAME_WIDTH);
@@ -243,4 +244,20 @@ void videoPrintf(const char *format, ...)
     {
         submitFrame(frontBuffer);
     }
+}
+
+void videoPrintf(const char *format, ...)
+{
+    va_list va;
+    va_start(va, format);
+    consolePrint(false, format, va);
+    va_end(va);
+}
+
+void videoReplaceLine(const char *format, ...)
+{
+    va_list va;
+    va_start(va, format);
+    consolePrint(true, format, va);
+    va_end(va);
 }
